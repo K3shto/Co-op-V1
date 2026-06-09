@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Beam Sync — Co-op Physics Puzzle</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <style>
+    :root { --p1:#2DD4BF; --p2:#FB7185; --gold:#FCD34D; }
+    *{box-sizing:border-box;margin:0;padding:0}
+
+    body {
+      font-family:'Courier New',monospace;
+      background:#0d1117;
+      color:#e2e8f0;
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow-x:hidden;
+    }
+
+    /* Subtle scanline overlay */
+    body::before{
+      content:'';position:fixed;inset:0;pointer-events:none;z-index:999;
+      background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 4px);
+    }
+
+    #app{width:100%;max-width:640px;padding:20px;}
+
+    .screen{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:520px;text-align:center;padding:16px;}
+    .screen.on{display:flex;}
+
+    /* ── Typography ── */
+    .gtitle{
+      font-family:'Orbitron',monospace;font-size:2.4rem;font-weight:900;
+      letter-spacing:.2em;color:var(--p1);
+      text-shadow:0 0 30px rgba(45,212,191,.45);margin-bottom:4px;
+    }
+    .gsub{font-size:10px;letter-spacing:.4em;color:rgba(255,255,255,.28);text-transform:uppercase;margin-bottom:38px;}
+    .label{font-size:10px;letter-spacing:.3em;color:rgba(255,255,255,.32);text-transform:uppercase;margin-bottom:10px;}
+
+    /* ── Buttons ── */
+    .btn{
+      font-family:'Orbitron',monospace;font-size:11px;font-weight:700;
+      letter-spacing:.15em;padding:13px 36px;
+      border:1px solid rgba(255,255,255,.14);border-radius:4px;
+      cursor:pointer;background:transparent;color:#e2e8f0;
+      transition:all .18s;text-transform:uppercase;
+    }
+    .btn:hover{border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.05);}
+    .btn:disabled{opacity:.35;cursor:not-allowed;}
+    .btn-p1{background:rgba(45,212,191,.1);border-color:var(--p1);color:var(--p1);}
+    .btn-p1:hover{background:rgba(45,212,191,.2);box-shadow:0 0 20px rgba(45,212,191,.3);}
+    .btn-gold{background:rgba(252,211,77,.1);border-color:var(--gold);color:var(--gold);}
+    .btn-gold:hover{background:rgba(252,211,77,.2);box-shadow:0 0 20px rgba(252,211,77,.3);}
+
+    /* ── Room code display ── */
+    .rcode{
+      font-family:'Orbitron',monospace;font-size:3.5rem;font-weight:900;
+      letter-spacing:.6em;padding-right:.6em;color:var(--p1);
+      text-shadow:0 0 40px rgba(45,212,191,.5);margin:12px 0 22px;
+    }
+
+    /* ── Code input ── */
+    .cinput{
+      font-family:'Orbitron',monospace;font-size:1.8rem;font-weight:700;
+      letter-spacing:.4em;text-align:center;text-transform:uppercase;
+      width:190px;padding:12px;
+      background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.11);
+      border-radius:4px;color:#e2e8f0;outline:none;margin-bottom:12px;
+    }
+    .cinput:focus{border-color:var(--p2);box-shadow:0 0 16px rgba(251,113,133,.2);}
+
+    /* ── Badges ── */
+    .badge{
+      font-family:'Orbitron',monospace;font-size:9px;font-weight:700;
+      letter-spacing:.2em;padding:6px 16px;border-radius:3px;
+      margin-bottom:20px;text-transform:uppercase;
+    }
+    .bp1{background:rgba(45,212,191,.12);border:1px solid rgba(45,212,191,.38);color:var(--p1);}
+    .bp2{background:rgba(251,113,133,.12);border:1px solid rgba(251,113,133,.38);color:var(--p2);}
+
+    .errm{font-size:11px;color:#ff6b6b;min-height:18px;margin-top:8px;letter-spacing:.05em;}
+    .divider{width:160px;height:1px;background:rgba(255,255,255,.07);margin:20px 0;}
+    .infobox{font-size:12px;color:rgba(255,255,255,.38);line-height:2;letter-spacing:.04em;}
+
+    .pulse{animation:pulse 2s ease-in-out infinite;}
+    @keyframes pulse{0%,100%{opacity:.3}50%{opacity:.9}}
+
+    .dot{
+      display:inline-block;width:6px;height:6px;border-radius:50%;
+      margin-right:7px;vertical-align:middle;
+      animation:blink 1.4s ease-in-out infinite;
+    }
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.15}}
+
+    /* ── HUD ── */
+    .hud{
+      display:flex;justify-content:space-between;align-items:center;
+      width:560px;margin-bottom:7px;padding:0 3px;
+    }
+    .hp1{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:.12em;color:var(--p1);}
+    .hp2{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;letter-spacing:.12em;color:var(--p2);}
+    .hlv{font-family:'Orbitron',monospace;font-size:9px;letter-spacing:.2em;color:rgba(255,255,255,.3);}
+
+    /* ── Canvas ── */
+    .cwrap{position:relative;display:block;width:560px;}
+    #cv{display:block;border-radius:6px;border:1px solid rgba(255,255,255,.07);}
+
+    .cdo{
+      position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+      background:rgba(13,17,23,.84);border-radius:6px;flex-direction:column;
+    }
+    .cdo.h{display:none;}
+    .cdnum{
+      font-family:'Orbitron',monospace;font-size:90px;font-weight:900;
+      color:#fff;line-height:1;text-shadow:0 0 40px rgba(255,255,255,.5);
+    }
+
+    .ctip{font-size:9px;letter-spacing:.2em;color:rgba(255,255,255,.22);margin-top:8px;text-transform:uppercase;}
+
+    /* ── Usage monitor ── */
+    #usage{
+      position:fixed;bottom:8px;right:12px;
+      font-size:9px;letter-spacing:.12em;color:rgba(255,255,255,.15);
+      font-family:'Orbitron',monospace;
+    }
+
+    /* ── Mobile scale ── */
+    @media(max-width:600px){
+      .hud{transform:scale(.62);transform-origin:top center;margin-bottom:-62px;}
+      .cwrap{transform:scale(.62);transform-origin:top center;margin-bottom:-155px;}
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- HOME -->
+  <div id="s-home" class="screen on">
+    <div class="gtitle">BEAM SYNC</div>
+    <div class="gsub">Co-op Physics Puzzle · 2 Players</div>
+    <button id="btn-create" class="btn btn-p1" onclick="createRoom()">◈ Create Room</button>
+    <div class="divider"></div>
+    <div class="label">Enter room code</div>
+    <input id="ji" class="cinput" type="text" maxlength="4" placeholder="XXXX"
+           oninput="this.value=this.value.toUpperCase();document.getElementById('je').textContent=''">
+    <button class="btn" onclick="joinRoom()">Join Room →</button>
+    <div class="errm" id="je"></div>
+  </div>
+
+  <!-- WAITING (P1) -->
+  <div id="s-wait" class="screen">
+    <div class="badge bp1">Player 1 — Left Beam</div>
+    <div class="label">Share this code with your partner</div>
+    <div class="rcode" id="dc">----</div>
+    <div class="label">
+      <span class="dot" style="background:var(--p1)"></span>
+      <span class="pulse">Waiting for Player 2…</span>
+    </div>
+    <div class="divider"></div>
+    <div class="infobox">
+      You control the <strong style="color:var(--p1)">← teal beam</strong> on the left.<br>
+      Hold <kbd style="color:rgba(255,255,255,.55)">Space</kbd> or click / tap to activate.
+    </div>
+  </div>
+
+  <!-- JOINING (P2) -->
+  <div id="s-join" class="screen">
+    <div class="badge bp2">Player 2 — Right Beam</div>
+    <div class="label">
+      <span class="dot" style="background:var(--p2)"></span>
+      <span class="pulse">Connecting to room…</span>
+    </div>
+    <div class="divider"></div>
+    <div class="infobox">
+      You control the <strong style="color:var(--p2)">magenta beam →</strong> on the right.<br>
+      Hold <kbd style="color:rgba(255,255,255,.55)">Space</kbd> or click / tap to activate.
+    </div>
+  </div>
+
+  <!-- GAME -->
+  <div id="s-game" class="screen">
+    <div class="hud">
+      <span class="hp1" id="hp1">◈ P1 LEFT</span>
+      <span class="hlv" id="hlv">LEVEL 1 / 3</span>
+      <span class="hp2" id="hp2">P2 RIGHT ◈</span>
+    </div>
+    <div class="cwrap">
+      <canvas id="cv" width="560" height="400"></canvas>
+      <div class="cdo h" id="cdo">
+        <div class="cdnum" id="cdn">3</div>
+      </div>
+    </div>
+    <div class="ctip">Hold space or click / touch anywhere to activate your beam</div>
+  </div>
+
+  <!-- VICTORY -->
+  <div id="s-win" class="screen">
+    <div class="gtitle" style="color:var(--gold);text-shadow:0 0 30px rgba(252,211,77,.5)">VICTORY!</div>
+    <div class="gsub" style="margin-bottom:30px">All levels cleared — perfect sync!</div>
+    <button class="btn btn-gold" onclick="resetGame()">↺ Play Again</button>
+  </div>
+
+</div>
+<div id="usage"></div>
+
+<script>
+// ─────────────────────────────────────────────
+// SUPABASE CONFIG
+// ─────────────────────────────────────────────
+const SUPA_URL = 'https://ahqxmctwrtanvhmpddcq.supabase.co';
+const SUPA_KEY = 'sb_publishable_4fA8G345-YHfzbAy8eLH_A_3tQ3sx7v';
+const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
+
+// ─────────────────────────────────────────────
+// USAGE BUDGET
+// Free tier: 2,000,000 Realtime msgs/month
+//   Host:  100ms sync  → 10 msgs/sec
+//   P2:    500ms max   →  2 msgs/sec (+ on beam change)
+//   Total: ~12 msgs/sec · 10min game ≈ 7,200 msgs
+//   Budget: ~275 full games/month — well within free tier
+// ─────────────────────────────────────────────
+const HOST_SYNC_MS   = 100;   // host → everyone
+const P2_HBEAT_MS    = 500;   // P2 fallback heartbeat
+const IDLE_EXPIRE_MS = 10 * 60 * 1000; // 10-min idle disconnect
+
+// ─────────────────────────────────────────────
+// GAME CONSTANTS
+// ─────────────────────────────────────────────
+const CW=560, CH=400, GRAV=0.09, BF=0.23, BR=11, DAMP=0.974, SR=16;
+const P1B={x:28, y:CH/2};
+const P2B={x:CW-28, y:CH/2};
+
+const LV = [
+  {
+    bs:{x:CW/2, y:CH-55, vx:1,   vy:-1},
+    st:{x:CW/2, y:55},
+    obs:[],
+    tip:"Guide the ball to the star — both beams needed!"
+  },
+  {
+    bs:{x:110,  y:CH-55, vx:1.8, vy:0},
+    st:{x:CW-110, y:65},
+    obs:[{x:CW/2-65, y:CH/2-8, w:130, h:16}],
+    tip:"Watch the barrier in the middle!"
+  },
+  {
+    bs:{x:CW/2, y:CH-55, vx:-1.2, vy:-1},
+    st:{x:CW/2, y:52},
+    obs:[{x:85, y:212, w:112, h:14},{x:CW-197, y:156, w:112, h:14}],
+    tip:"Final level — stay in perfect sync!"
+  }
+];
+
+// ─────────────────────────────────────────────
+// RUNTIME STATE
+// ─────────────────────────────────────────────
+let rid=null, pid=null, host=false, lba=false;
+let gs={status:'idle',level:0,ball:{x:CW/2,y:CH-55,vx:1,vy:-1},p1A:false,p2A:false};
+let channel=null, aid=null, syncTimer=null, pingTimer=null, idleTimer=null;
+let sa=0, parts=[], tipT='', tipA=0, cv, ctx;
+let lastP2Beam=null, lastP2Ts=0, msgCount=0, sessionTs=Date.now();
+
+// ─────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────
+const show = id => {
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+  document.getElementById('s-'+id).classList.add('on');
+};
+
+function genCode(){
+  const c='ABCDEFGHJKLMNPQRSTUVWXYZ234568';
+  let s=''; for(let i=0;i<4;i++) s+=c[Math.floor(Math.random()*c.length)]; return s;
+}
+
+function trackMsg(){
+  msgCount++;
+  const elapsed = Math.max(1, Math.round((Date.now()-sessionTs)/60000));
+  document.getElementById('usage').textContent =
+    `RT msgs · session: ${msgCount} · ~${Math.round(msgCount/elapsed)}/min`;
+}
+
+function resetIdle(){
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(()=>{
+    cleanup();
+    document.getElementById('je').textContent = 'Session expired after 10 min idle. Create a new room.';
+    show('home');
+  }, IDLE_EXPIRE_MS);
+}
+
+function cleanup(){
+  if(channel){ channel.unsubscribe(); channel=null; }
+  if(aid){ cancelAnimationFrame(aid); aid=null; }
+  if(syncTimer){ clearInterval(syncTimer); syncTimer=null; }
+  if(pingTimer){ clearInterval(pingTimer); pingTimer=null; }
+  clearTimeout(idleTimer);
+}
+
+window.addEventListener('beforeunload', cleanup);
+window.addEventListener('visibilitychange', ()=>{ if(document.hidden) cleanup(); });
+
+// ─────────────────────────────────────────────
+// CREATE ROOM (Player 1)
+// ─────────────────────────────────────────────
+async function createRoom(){
+  document.getElementById('btn-create').disabled = true;
+  rid=genCode(); pid='p1'; host=true;
+
+  channel = sb.channel(`beamsync:${rid}`, {
+    config:{ broadcast:{ self:false, ack:false } }
+  });
+
+  // P2 sends a join_req when it detects our ping
+  channel.on('broadcast',{event:'join_req'},()=>{
+    clearInterval(pingTimer); pingTimer=null;
+    // Acknowledge join
+    channel.send({type:'broadcast',event:'join_ack',payload:{ok:true}});
+    trackMsg();
+    startCD();
+  });
+
+  channel.subscribe(status=>{
+    if(status==='SUBSCRIBED'){
+      document.getElementById('dc').textContent = rid;
+      show('wait');
+      // Advertise room every 1s so P2 can find it
+      pingTimer = setInterval(()=>{
+        channel.send({type:'broadcast',event:'host_ping',payload:{rid}});
+        trackMsg();
+      }, 1000);
+      resetIdle();
+    } else if(status==='CHANNEL_ERROR'){
+      document.getElementById('btn-create').disabled=false;
+      alert('Could not connect to Supabase. Check your network.');
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// JOIN ROOM (Player 2)
+// ─────────────────────────────────────────────
+async function joinRoom(){
+  const code = document.getElementById('ji').value.trim().toUpperCase();
+  const err  = document.getElementById('je');
+  if(code.length!==4){ err.textContent='Enter a 4-letter code.'; return; }
+
+  rid=code; pid='p2'; host=false;
+  err.textContent='Searching…';
+  document.getElementById('ji').disabled=true;
+
+  channel = sb.channel(`beamsync:${rid}`, {
+    config:{ broadcast:{ self:false, ack:false } }
+  });
+
+  let found=false;
+
+  // Timeout if no host_ping within 7 seconds
+  const noRoom = setTimeout(()=>{
+    if(!found){
+      cleanup();
+      document.getElementById('ji').disabled=false;
+      err.textContent='Room not found — check the code and try again.';
+    }
+  }, 7000);
+
+  // Detect host presence via ping
+  channel.on('broadcast',{event:'host_ping'},()=>{
+    if(found) return;
+    found=true;
+    clearTimeout(noRoom);
+    err.textContent='';
+    channel.send({type:'broadcast',event:'join_req',payload:{role:'p2'}});
+    trackMsg();
+    show('join');
+  });
+
+  // Host acknowledged join
+  channel.on('broadcast',{event:'join_ack'},()=>{
+    setTimeout(()=>startCD(), 150);
+  });
+
+  // Receive live game state from host
+  channel.on('broadcast',{event:'host_state'},({payload})=>{
+    if(!payload) return;
+    gs.ball = payload.ball;
+    gs.p1A  = payload.p1A;
+    if(gs.status!==payload.status || gs.level!==payload.level){
+      gs.status = payload.status;
+      gs.level  = payload.level;
+      updHUD();
+      if(gs.status==='victory'){
+        setTimeout(()=>{ cleanup(); show('win'); }, 3200);
+      }
+    }
+    resetIdle();
+  });
+
+  channel.subscribe(status=>{
+    if(status==='CHANNEL_ERROR'){
+      document.getElementById('ji').disabled=false;
+      err.textContent='Connection error — try again.';
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// COUNTDOWN (both players)
+// ─────────────────────────────────────────────
+function startCD(){
+  show('game');
+  initCV(); updHUD();
+  const ov=document.getElementById('cdo'), ne=document.getElementById('cdn');
+  ov.classList.remove('h');
+  let c=3; ne.textContent=c;
+
+  const tick=()=>{
+    c--;
+    if(c>0){ ne.textContent=c; setTimeout(tick,900); }
+    else{
+      ne.textContent='Go!';
+      setTimeout(()=>{
+        ov.classList.add('h');
+        if(host){
+          gs.ball={...LV[0].bs};
+          gs.status='playing';
+          // Listen for P2 beam input
+          channel.on('broadcast',{event:'p2_beam'},({payload})=>{
+            if(payload!=null) gs.p2A=payload.active;
+            resetIdle();
+          });
+        }
+        startLoop();
+        showTip(LV[0].tip);
+        resetIdle();
+      },800);
+    }
+  };
+  setTimeout(tick,900);
+}
+
+// ─────────────────────────────────────────────
+// CANVAS CONTROLS
+// ─────────────────────────────────────────────
+function initCV(){
+  cv=document.getElementById('cv'); ctx=cv.getContext('2d');
+  const on=()=>{ lba=true; resetIdle(); };
+  const off=()=>{ lba=false; };
+  // Prevent duplicate listeners if reinitialised
+  cv.replaceWith(cv.cloneNode(true));
+  cv=document.getElementById('cv'); ctx=cv.getContext('2d');
+  document.onkeydown=e=>{ if(e.code==='Space'){e.preventDefault();on();} };
+  document.onkeyup  =e=>{ if(e.code==='Space') off(); };
+  cv.addEventListener('mousedown',on);
+  cv.addEventListener('mouseup',off);
+  cv.addEventListener('mouseleave',off);
+  cv.addEventListener('touchstart',e=>{e.preventDefault();on();},{passive:false});
+  cv.addEventListener('touchend',  e=>{e.preventDefault();off();},{passive:false});
+}
+
+// ─────────────────────────────────────────────
+// GAME LOOP
+// ─────────────────────────────────────────────
+function startLoop(){
+  if(aid) cancelAnimationFrame(aid);
+  if(syncTimer) clearInterval(syncTimer);
+
+  if(host){
+    syncTimer = setInterval(hostSync, HOST_SYNC_MS);
+  } else {
+    syncTimer = setInterval(p2Sync, 50); // check frequently, send throttled
+  }
+
+  const loop=()=>{ phys(); render(); aid=requestAnimationFrame(loop); };
+  aid=requestAnimationFrame(loop);
+}
+
+// ─────────────────────────────────────────────
+// HOST SYNC — broadcasts full game state
+// ─────────────────────────────────────────────
+function hostSync(){
+  if(!channel||gs.status==='idle') return;
+  gs.p1A=lba;
+  channel.send({
+    type:'broadcast', event:'host_state',
+    payload:{ ball:gs.ball, p1A:gs.p1A, status:gs.status, level:gs.level }
+  });
+  trackMsg();
+}
+
+// ─────────────────────────────────────────────
+// P2 SYNC — sends beam state on change + heartbeat
+// ─────────────────────────────────────────────
+function p2Sync(){
+  if(!channel) return;
+  const now=Date.now();
+  const changed   = lba!==lastP2Beam;
+  const heartbeat = now-lastP2Ts > P2_HBEAT_MS;
+  if(changed||heartbeat){
+    lastP2Beam=lba; lastP2Ts=now;
+    channel.send({type:'broadcast',event:'p2_beam',payload:{active:lba}});
+    trackMsg();
+  }
+}
+
+// ─────────────────────────────────────────────
+// PHYSICS (host only)
+// ─────────────────────────────────────────────
+function phys(){
+  updParts(); if(tipA>0) tipA-=0.009;
+  if(!host||gs.status!=='playing') return;
+  gs.p1A=lba;
+  const b=gs.ball;
+  b.vy+=GRAV;
+
+  const applyBeam=(bx,by)=>{
+    const dx=bx-b.x, dy=by-b.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+    b.vx+=(dx/d)*BF; b.vy+=(dy/d)*BF;
+  };
+  if(gs.p1A) applyBeam(P1B.x,P1B.y);
+  if(gs.p2A) applyBeam(P2B.x,P2B.y);
+
+  b.vx*=DAMP; b.vy*=DAMP;
+  const sp=Math.sqrt(b.vx*b.vx+b.vy*b.vy);
+  if(sp>10){ b.vx=b.vx/sp*10; b.vy=b.vy/sp*10; }
+
+  b.x+=b.vx; b.y+=b.vy;
+
+  if(b.x-BR<0)  { b.x=BR;    b.vx= Math.abs(b.vx)*.5; spk(0,b.y,4); }
+  if(b.x+BR>CW) { b.x=CW-BR; b.vx=-Math.abs(b.vx)*.5; spk(CW,b.y,4); }
+  if(b.y-BR<0)  { b.y=BR;    b.vy= Math.abs(b.vy)*.5; }
+  if(b.y+BR>CH) { b.y=CH-BR; b.vy=-Math.abs(b.vy)*.55; spk(b.x,CH,5); }
+
+  for(const o of LV[gs.level||0].obs) colObs(b,o);
+
+  const s=LV[gs.level||0].st, dx=b.x-s.x, dy=b.y-s.y;
+  if(Math.sqrt(dx*dx+dy*dy)<SR+BR-2) lvDone();
+}
+
+function colObs(b,o){
+  const nx=Math.max(o.x,Math.min(b.x,o.x+o.w));
+  const ny=Math.max(o.y,Math.min(b.y,o.y+o.h));
+  const dx=b.x-nx, dy=b.y-ny, d=Math.sqrt(dx*dx+dy*dy);
+  if(d<BR){
+    const ex=dx/(d||1), ey=dy/(d||1);
+    b.x=nx+ex*BR; b.y=ny+ey*BR;
+    const dt=b.vx*ex+b.vy*ey;
+    b.vx=(b.vx-2*dt*ex)*.5; b.vy=(b.vy-2*dt*ey)*.5;
+    spk(b.x,b.y,3);
+  }
+}
+
+// ─────────────────────────────────────────────
+// LEVEL COMPLETE
+// ─────────────────────────────────────────────
+function lvDone(){
+  if(gs.status!=='playing') return;
+  gs.status='levelComplete';
+  bigSpk(gs.ball.x, gs.ball.y);
+
+  if(gs.level<LV.length-1){
+    const nl=gs.level+1;
+    setTimeout(()=>{
+      gs.level=nl; gs.ball={...LV[nl].bs}; gs.status='playing';
+      showTip(LV[nl].tip); updHUD();
+    }, 2800);
+  } else {
+    setTimeout(()=>{ gs.status='victory'; }, 2200);
+    setTimeout(()=>{ cleanup(); show('win'); }, 3200);
+  }
+}
+
+// ─────────────────────────────────────────────
+// PARTICLES
+// ─────────────────────────────────────────────
+function spk(x,y,n){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, s=.5+Math.random()*2;
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:.7,m:.7,r:1.5+Math.random()*1.5,c:'#64748b'});
+  }
+}
+function bigSpk(x,y){
+  const cs=['#2DD4BF','#FB7185','#FCD34D','#ffffff'];
+  for(let i=0;i<40;i++){
+    const a=(i/40)*Math.PI*2, s=1.5+Math.random()*5;
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:1.8,m:1.8,r:2+Math.random()*3,c:cs[i%4]});
+  }
+}
+function updParts(){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];
+    p.x+=p.vx; p.y+=p.vy; p.vy+=.04; p.l-=.025;
+    if(p.l<=0) parts.splice(i,1);
+  }
+}
+function showTip(t){ tipT=t; tipA=2.8; }
+
+function updHUD(){
+  document.getElementById('hp1').textContent = pid==='p1'?'◈ YOU (LEFT)':'◈ P1 LEFT';
+  document.getElementById('hp2').textContent = pid==='p2'?'YOU (RIGHT) ◈':'P2 RIGHT ◈';
+  document.getElementById('hlv').textContent = `LEVEL ${(gs.level||0)+1} / ${LV.length}`;
+}
+
+// ─────────────────────────────────────────────
+// RENDER
+// ─────────────────────────────────────────────
+function render(){
+  if(!ctx||!gs) return;
+  const b=gs.ball, lv=LV[gs.level||0];
+  sa+=.025;
+  document.getElementById('hlv').textContent=`LEVEL ${(gs.level||0)+1} / ${LV.length}`;
+
+  // Background
+  ctx.fillStyle='#0d1117'; ctx.fillRect(0,0,CW,CH);
+
+  // Grid
+  ctx.strokeStyle='rgba(255,255,255,0.025)'; ctx.lineWidth=1;
+  for(let x=0;x<CW;x+=40){ ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,CH);ctx.stroke(); }
+  for(let y=0;y<CH;y+=40){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(CW,y);ctx.stroke(); }
+
+  // Determine visible beam states — own beam is always local (immediate)
+  const p1on = pid==='p1' ? lba : gs.p1A;
+  const p2on = pid==='p2' ? lba : gs.p2A;
+
+  // Beams
+  if(b&&p1on) dBeam(P1B.x,P1B.y,b.x,b.y,'#2DD4BF');
+  if(b&&p2on) dBeam(P2B.x,P2B.y,b.x,b.y,'#FB7185');
+
+  // Beam nodes
+  dNode(P1B.x,P1B.y,'#2DD4BF',p1on,pid==='p1');
+  dNode(P2B.x,P2B.y,'#FB7185',p2on,pid==='p2');
+
+  // Obstacles
+  for(const o of lv.obs){
+    ctx.fillStyle='rgba(99,65,180,0.32)'; ctx.fillRect(o.x,o.y,o.w,o.h);
+    ctx.strokeStyle='#7C4DFF'; ctx.lineWidth=1.5; ctx.strokeRect(o.x,o.y,o.w,o.h);
+    ctx.fillStyle='rgba(180,150,255,0.18)'; ctx.fillRect(o.x+2,o.y+2,o.w-4,3);
+  }
+
+  // Star
+  const st=lv.st, pls=.5+.5*Math.sin(Date.now()/350);
+  ctx.beginPath(); ctx.arc(st.x,st.y,SR+4+pls*3,0,Math.PI*2);
+  ctx.fillStyle=`rgba(252,211,77,${.05+pls*.07})`; ctx.fill();
+
+  ctx.save(); ctx.translate(st.x,st.y); ctx.rotate(sa);
+  ctx.beginPath();
+  for(let i=0;i<5;i++){
+    const o=i*(Math.PI*2/5)-Math.PI/2, n=o+Math.PI/5;
+    if(i===0) ctx.moveTo(Math.cos(o)*13,Math.sin(o)*13);
+    else       ctx.lineTo(Math.cos(o)*13,Math.sin(o)*13);
+    ctx.lineTo(Math.cos(n)*5.5,Math.sin(n)*5.5);
+  }
+  ctx.closePath();
+  ctx.fillStyle='#FCD34D'; ctx.shadowColor='#FCD34D'; ctx.shadowBlur=18; ctx.fill();
+  ctx.shadowBlur=0; ctx.restore();
+
+  // Ball
+  if(b){
+    ctx.globalAlpha=.14;
+    ctx.beginPath(); ctx.arc(b.x-b.vx*3,b.y-b.vy*3,BR*.75,0,Math.PI*2);
+    ctx.fillStyle='#FCD34D'; ctx.fill();
+    ctx.globalAlpha=.06;
+    ctx.beginPath(); ctx.arc(b.x-b.vx*6,b.y-b.vy*6,BR*.45,0,Math.PI*2);
+    ctx.fill(); ctx.globalAlpha=1;
+
+    const hl=ctx.createRadialGradient(b.x,b.y,0,b.x,b.y,BR*2.1);
+    hl.addColorStop(0,'rgba(252,211,77,0.2)'); hl.addColorStop(1,'rgba(252,211,77,0)');
+    ctx.beginPath(); ctx.arc(b.x,b.y,BR*2.1,0,Math.PI*2); ctx.fillStyle=hl; ctx.fill();
+
+    ctx.beginPath(); ctx.arc(b.x,b.y,BR,0,Math.PI*2);
+    ctx.fillStyle='#FCD34D'; ctx.shadowColor='#FCD34D'; ctx.shadowBlur=15; ctx.fill();
+    ctx.shadowBlur=0;
+
+    ctx.beginPath(); ctx.arc(b.x-3.5,b.y-3.5,3.5,0,Math.PI*2);
+    ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.fill();
+  }
+
+  // Particles
+  for(const p of parts){
+    ctx.globalAlpha=p.l/p.m;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=p.c; ctx.fill();
+  }
+  ctx.globalAlpha=1;
+
+  // Level complete overlay
+  if(gs.status==='levelComplete'){
+    ctx.fillStyle='rgba(13,17,23,0.65)'; ctx.fillRect(0,0,CW,CH);
+    ctx.textAlign='center';
+    ctx.font="bold 44px 'Orbitron',monospace";
+    ctx.fillStyle='#fff'; ctx.shadowColor='rgba(255,255,255,0.32)'; ctx.shadowBlur=22;
+    ctx.fillText('SYNCED!',CW/2,CH/2-8); ctx.shadowBlur=0;
+    ctx.font="11px 'Orbitron',monospace"; ctx.fillStyle='rgba(255,255,255,0.38)';
+    ctx.fillText('Level complete — loading next…',CW/2,CH/2+28);
+  }
+
+  // Victory overlay
+  if(gs.status==='victory'){
+    ctx.fillStyle='rgba(13,17,23,0.74)'; ctx.fillRect(0,0,CW,CH);
+    ctx.textAlign='center';
+    ctx.font="bold 52px 'Orbitron',monospace";
+    ctx.fillStyle='#FCD34D'; ctx.shadowColor='#FCD34D'; ctx.shadowBlur=26;
+    ctx.fillText('VICTORY!',CW/2,CH/2); ctx.shadowBlur=0;
+  }
+
+  // Tip text
+  if(tipA>0&&tipT){
+    ctx.globalAlpha=Math.min(tipA,1)*.78;
+    ctx.textAlign='center';
+    ctx.font="10px 'Orbitron',monospace";
+    ctx.fillStyle='#FCD34D';
+    ctx.fillText(tipT,CW/2,CH-14);
+    ctx.globalAlpha=1;
+  }
+}
+
+// ─────────────────────────────────────────────
+// DRAW: beam line with travelling dots
+// ─────────────────────────────────────────────
+function dBeam(x1,y1,x2,y2,c){
+  ctx.save();
+  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=c+'20';ctx.lineWidth=14;ctx.stroke();
+  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=c+'50';ctx.lineWidth=4;ctx.stroke();
+  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=c;ctx.lineWidth=1.2;ctx.stroke();
+  const len=Math.sqrt((x2-x1)**2+(y2-y1)**2)||1;
+  const nx=(x2-x1)/len, ny=(y2-y1)/len;
+  const t=(Date.now()/175)%1;
+  for(let i=0;i<5;i++){
+    const fr=(t+i/5)%1;
+    ctx.beginPath(); ctx.arc(x1+nx*len*fr,y1+ny*len*fr,2,0,Math.PI*2);
+    ctx.fillStyle=c; ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+// DRAW: beam emitter node
+// ─────────────────────────────────────────────
+function dNode(x,y,c,on,isYou){
+  ctx.save();
+  const p=.5+.5*Math.sin(Date.now()/400);
+  ctx.beginPath(); ctx.arc(x,y,on?20+p*3:11,0,Math.PI*2);
+  ctx.strokeStyle=c+(on?'aa':'28'); ctx.lineWidth=1.2; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,on?13:7,0,Math.PI*2);
+  ctx.fillStyle=c+(on?'28':'0d'); ctx.fill();
+  ctx.beginPath(); ctx.arc(x,y,4.5,0,Math.PI*2);
+  ctx.fillStyle=on?c:c+'44';
+  ctx.shadowColor=c; ctx.shadowBlur=on?18:5; ctx.fill(); ctx.shadowBlur=0;
+  if(isYou){
+    const lt=x<CW/2; ctx.textAlign=lt?'left':'right';
+    const tx=lt?x+22:x-22;
+    ctx.font="bold 8px 'Orbitron',monospace";
+    ctx.fillStyle=c+(on?'ff':'80'); ctx.fillText('YOU',tx,y+3);
+    ctx.font="7px 'Orbitron',monospace";
+    ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.fillText('HOLD TO BEAM',tx,y+14);
+  }
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────
+// RESET
+// ─────────────────────────────────────────────
+function resetGame(){
+  cleanup();
+  rid=null; pid=null; host=false; lba=false; parts=[]; tipT=''; tipA=0;
+  gs={status:'idle',level:0,ball:{...LV[0].bs},p1A:false,p2A:false};
+  cv=null; ctx=null; sa=0; msgCount=0; sessionTs=Date.now();
+  lastP2Beam=null; lastP2Ts=0;
+  document.getElementById('ji').value='';
+  document.getElementById('ji').disabled=false;
+  document.getElementById('je').textContent='';
+  document.getElementById('btn-create').disabled=false;
+  document.getElementById('usage').textContent='';
+  show('home');
+}
+</script>
+</body>
+</html>
