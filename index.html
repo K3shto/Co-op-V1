@@ -194,7 +194,7 @@
         <div class="cdnum" id="cdn">3</div>
       </div>
     </div>
-    <div class="ctip">Hold space or click / touch anywhere to activate your beam</div>
+    <div class="ctip">Move mouse / finger to aim · hold space or click to pull</div>
   </div>
 
   <!-- VICTORY -->
@@ -230,7 +230,8 @@ const IDLE_EXPIRE_MS = 10 * 60 * 1000; // 10-min idle disconnect
 // ─────────────────────────────────────────────
 // GAME CONSTANTS
 // ─────────────────────────────────────────────
-const CW=560, CH=400, GRAV=0.09, BF=0.23, BR=11, DAMP=0.974, SR=16;
+const CW=560, CH=400, GRAV=0.09, BF=0.40, BR=11, DAMP=0.974, SR=16;
+const WBOUNCE=0.75, FBOUNCE=0.75, OBOUNCE=0.65;
 const P1B={x:28, y:CH/2};
 const P2B={x:CW-28, y:CH/2};
 
@@ -259,10 +260,11 @@ const LV = [
 // RUNTIME STATE
 // ─────────────────────────────────────────────
 let rid=null, pid=null, host=false, lba=false;
-let gs={status:'idle',level:0,ball:{x:CW/2,y:CH-55,vx:1,vy:-1},p1A:false,p2A:false};
+let localCursor={x:P1B.x,y:P1B.y};
+let gs={status:'idle',level:0,ball:{x:CW/2,y:CH-55,vx:1,vy:-1},p1A:false,p2A:false,p1cx:P1B.x,p1cy:P1B.y,p2cx:P2B.x,p2cy:P2B.y};
 let channel=null, aid=null, syncTimer=null, pingTimer=null, idleTimer=null;
 let sa=0, parts=[], tipT='', tipA=0, cv, ctx;
-let lastP2Beam=null, lastP2Ts=0, msgCount=0, sessionTs=Date.now();
+let lastP2Beam=null, lastP2cx=null, lastP2cy=null, lastP2Ts=0, msgCount=0, sessionTs=Date.now();
 
 // ─────────────────────────────────────────────
 // UTILS
@@ -389,6 +391,7 @@ async function joinRoom(){
     if(!payload) return;
     gs.ball = payload.ball;
     gs.p1A  = payload.p1A;
+    if(payload.p1cx!=null){ gs.p1cx=payload.p1cx; gs.p1cy=payload.p1cy; }
     if(gs.status!==payload.status || gs.level!==payload.level){
       gs.status = payload.status;
       gs.level  = payload.level;
@@ -425,12 +428,21 @@ function startCD(){
       ne.textContent='Go!';
       setTimeout(()=>{
         ov.classList.add('h');
+        // Set default cursor to centre of each player's zone
+        localCursor = pid==='p1'
+          ? {x: CW/4,    y: CH/2}
+          : {x: CW*3/4,  y: CH/2};
+        if(pid==='p1'){ gs.p1cx=localCursor.x; gs.p1cy=localCursor.y; }
+        else           { gs.p2cx=localCursor.x; gs.p2cy=localCursor.y; }
         if(host){
           gs.ball={...LV[0].bs};
           gs.status='playing';
-          // Listen for P2 beam input
+          // Listen for P2 beam + cursor
           channel.on('broadcast',{event:'p2_beam'},({payload})=>{
-            if(payload!=null) gs.p2A=payload.active;
+            if(payload!=null){
+              gs.p2A=payload.active;
+              if(payload.cx!=null){ gs.p2cx=payload.cx; gs.p2cy=payload.cy; }
+            }
             resetIdle();
           });
         }
@@ -450,16 +462,50 @@ function initCV(){
   cv=document.getElementById('cv'); ctx=cv.getContext('2d');
   const on=()=>{ lba=true; resetIdle(); };
   const off=()=>{ lba=false; };
-  // Prevent duplicate listeners if reinitialised
+
+  // Helper: map screen coords to canvas coords
+  function canvasPos(clientX, clientY){
+    const r=cv.getBoundingClientRect();
+    return {
+      x:(clientX-r.left)*(CW/r.width),
+      y:(clientY-r.top)*(CH/r.height)
+    };
+  }
+  // Clamp cursor to player's zone
+  function moveCursor(cx,cy){
+    if(pid==='p1'){
+      localCursor.x=Math.max(20,Math.min(CW/2-20,cx));
+    } else {
+      localCursor.x=Math.max(CW/2+20,Math.min(CW-20,cx));
+    }
+    localCursor.y=Math.max(20,Math.min(CH-20,cy));
+  }
+
+  // Prevent duplicate listeners by replacing canvas
   cv.replaceWith(cv.cloneNode(true));
   cv=document.getElementById('cv'); ctx=cv.getContext('2d');
+
   document.onkeydown=e=>{ if(e.code==='Space'){e.preventDefault();on();} };
   document.onkeyup  =e=>{ if(e.code==='Space') off(); };
-  cv.addEventListener('mousedown',on);
-  cv.addEventListener('mouseup',off);
+
+  cv.addEventListener('mousedown', on);
+  cv.addEventListener('mouseup',   off);
   cv.addEventListener('mouseleave',off);
-  cv.addEventListener('touchstart',e=>{e.preventDefault();on();},{passive:false});
+  cv.addEventListener('mousemove', e=>{
+    const p=canvasPos(e.clientX,e.clientY);
+    moveCursor(p.x,p.y);
+  });
+  cv.addEventListener('touchstart', e=>{
+    e.preventDefault(); on();
+    const p=canvasPos(e.touches[0].clientX,e.touches[0].clientY);
+    moveCursor(p.x,p.y);
+  },{passive:false});
   cv.addEventListener('touchend',  e=>{e.preventDefault();off();},{passive:false});
+  cv.addEventListener('touchmove', e=>{
+    e.preventDefault();
+    const p=canvasPos(e.touches[0].clientX,e.touches[0].clientY);
+    moveCursor(p.x,p.y);
+  },{passive:false});
 }
 
 // ─────────────────────────────────────────────
@@ -484,10 +530,11 @@ function startLoop(){
 // ─────────────────────────────────────────────
 function hostSync(){
   if(!channel||gs.status==='idle') return;
-  gs.p1A=lba;
+  gs.p1A=lba; gs.p1cx=localCursor.x; gs.p1cy=localCursor.y;
   channel.send({
     type:'broadcast', event:'host_state',
-    payload:{ ball:gs.ball, p1A:gs.p1A, status:gs.status, level:gs.level }
+    payload:{ ball:gs.ball, p1A:gs.p1A, status:gs.status, level:gs.level,
+              p1cx:gs.p1cx, p1cy:gs.p1cy }
   });
   trackMsg();
 }
@@ -498,11 +545,13 @@ function hostSync(){
 function p2Sync(){
   if(!channel) return;
   const now=Date.now();
-  const changed   = lba!==lastP2Beam;
-  const heartbeat = now-lastP2Ts > P2_HBEAT_MS;
-  if(changed||heartbeat){
-    lastP2Beam=lba; lastP2Ts=now;
-    channel.send({type:'broadcast',event:'p2_beam',payload:{active:lba}});
+  const beamChanged = lba!==lastP2Beam;
+  const cursorMoved = Math.abs(localCursor.x-(lastP2cx||0))>6 || Math.abs(localCursor.y-(lastP2cy||0))>6;
+  const heartbeat   = now-lastP2Ts > P2_HBEAT_MS;
+  if(beamChanged||cursorMoved||heartbeat){
+    lastP2Beam=lba; lastP2cx=localCursor.x; lastP2cy=localCursor.y; lastP2Ts=now;
+    channel.send({type:'broadcast',event:'p2_beam',
+      payload:{active:lba, cx:localCursor.x, cy:localCursor.y}});
     trackMsg();
   }
 }
@@ -521,8 +570,11 @@ function phys(){
     const dx=bx-b.x, dy=by-b.y, d=Math.sqrt(dx*dx+dy*dy)||1;
     b.vx+=(dx/d)*BF; b.vy+=(dy/d)*BF;
   };
-  if(gs.p1A) applyBeam(P1B.x,P1B.y);
-  if(gs.p2A) applyBeam(P2B.x,P2B.y);
+  // Use live cursor positions as beam origins
+  const p1cx = host ? localCursor.x : gs.p1cx;
+  const p1cy = host ? localCursor.y : gs.p1cy;
+  if(gs.p1A) applyBeam(p1cx, p1cy);
+  if(gs.p2A) applyBeam(gs.p2cx, gs.p2cy);
 
   b.vx*=DAMP; b.vy*=DAMP;
   const sp=Math.sqrt(b.vx*b.vx+b.vy*b.vy);
@@ -530,10 +582,10 @@ function phys(){
 
   b.x+=b.vx; b.y+=b.vy;
 
-  if(b.x-BR<0)  { b.x=BR;    b.vx= Math.abs(b.vx)*.5; spk(0,b.y,4); }
-  if(b.x+BR>CW) { b.x=CW-BR; b.vx=-Math.abs(b.vx)*.5; spk(CW,b.y,4); }
-  if(b.y-BR<0)  { b.y=BR;    b.vy= Math.abs(b.vy)*.5; }
-  if(b.y+BR>CH) { b.y=CH-BR; b.vy=-Math.abs(b.vy)*.55; spk(b.x,CH,5); }
+  if(b.x-BR<0)  { b.x=BR;    b.vx= Math.abs(b.vx)*WBOUNCE; spk(0,b.y,4); }
+  if(b.x+BR>CW) { b.x=CW-BR; b.vx=-Math.abs(b.vx)*WBOUNCE; spk(CW,b.y,4); }
+  if(b.y-BR<0)  { b.y=BR;    b.vy= Math.abs(b.vy)*WBOUNCE; }
+  if(b.y+BR>CH) { b.y=CH-BR; b.vy=-Math.abs(b.vy)*FBOUNCE; spk(b.x,CH,5); }
 
   for(const o of LV[gs.level||0].obs) colObs(b,o);
 
@@ -549,7 +601,7 @@ function colObs(b,o){
     const ex=dx/(d||1), ey=dy/(d||1);
     b.x=nx+ex*BR; b.y=ny+ey*BR;
     const dt=b.vx*ex+b.vy*ey;
-    b.vx=(b.vx-2*dt*ex)*.5; b.vy=(b.vy-2*dt*ey)*.5;
+    b.vx=(b.vx-2*dt*ex)*OBOUNCE; b.vy=(b.vy-2*dt*ey)*OBOUNCE;
     spk(b.x,b.y,3);
   }
 }
@@ -622,17 +674,32 @@ function render(){
   for(let x=0;x<CW;x+=40){ ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,CH);ctx.stroke(); }
   for(let y=0;y<CH;y+=40){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(CW,y);ctx.stroke(); }
 
-  // Determine visible beam states — own beam is always local (immediate)
+  // Determine cursor positions (own = immediate local, other = synced)
   const p1on = pid==='p1' ? lba : gs.p1A;
   const p2on = pid==='p2' ? lba : gs.p2A;
+  const p1cx = pid==='p1' ? localCursor.x : gs.p1cx;
+  const p1cy = pid==='p1' ? localCursor.y : gs.p1cy;
+  const p2cx = pid==='p2' ? localCursor.x : gs.p2cx;
+  const p2cy = pid==='p2' ? localCursor.y : gs.p2cy;
 
-  // Beams
-  if(b&&p1on) dBeam(P1B.x,P1B.y,b.x,b.y,'#2DD4BF');
-  if(b&&p2on) dBeam(P2B.x,P2B.y,b.x,b.y,'#FB7185');
+  // Zone divider
+  ctx.save();
+  ctx.setLineDash([4,8]);
+  ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(CW/2,0); ctx.lineTo(CW/2,CH); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font="7px 'Orbitron',monospace"; ctx.textAlign='center';
+  ctx.fillStyle='rgba(45,212,191,0.22)';  ctx.fillText('P1 ZONE',CW/4, CH-8);
+  ctx.fillStyle='rgba(251,113,133,0.22)'; ctx.fillText('P2 ZONE',CW*3/4,CH-8);
+  ctx.restore();
 
-  // Beam nodes
-  dNode(P1B.x,P1B.y,'#2DD4BF',p1on,pid==='p1');
-  dNode(P2B.x,P2B.y,'#FB7185',p2on,pid==='p2');
+  // Beams from cursor to ball
+  if(b&&p1on) dBeam(p1cx,p1cy,b.x,b.y,'#2DD4BF');
+  if(b&&p2on) dBeam(p2cx,p2cy,b.x,b.y,'#FB7185');
+
+  // Cursor crosshairs
+  dCursor(p1cx,p1cy,'#2DD4BF',p1on,pid==='p1');
+  dCursor(p2cx,p2cy,'#FB7185',p2on,pid==='p2');
 
   // Obstacles
   for(const o of lv.obs){
@@ -738,25 +805,33 @@ function dBeam(x1,y1,x2,y2,c){
 }
 
 // ─────────────────────────────────────────────
-// DRAW: beam emitter node
+// DRAW: moveable cursor crosshair (beam origin)
 // ─────────────────────────────────────────────
-function dNode(x,y,c,on,isYou){
+function dCursor(x,y,c,on,isYou){
   ctx.save();
-  const p=.5+.5*Math.sin(Date.now()/400);
-  ctx.beginPath(); ctx.arc(x,y,on?20+p*3:11,0,Math.PI*2);
-  ctx.strokeStyle=c+(on?'aa':'28'); ctx.lineWidth=1.2; ctx.stroke();
-  ctx.beginPath(); ctx.arc(x,y,on?13:7,0,Math.PI*2);
-  ctx.fillStyle=c+(on?'28':'0d'); ctx.fill();
-  ctx.beginPath(); ctx.arc(x,y,4.5,0,Math.PI*2);
-  ctx.fillStyle=on?c:c+'44';
-  ctx.shadowColor=c; ctx.shadowBlur=on?18:5; ctx.fill(); ctx.shadowBlur=0;
+  const p=.5+.5*Math.sin(Date.now()/380);
+  // Outer ring
+  ctx.beginPath();ctx.arc(x,y,on?18+p*3:10,0,Math.PI*2);
+  ctx.strokeStyle=c+(on?'bb':'30');ctx.lineWidth=1.2;ctx.stroke();
+  // Fill
+  ctx.beginPath();ctx.arc(x,y,on?12:6,0,Math.PI*2);
+  ctx.fillStyle=c+(on?'2a':'0d');ctx.fill();
+  // Core
+  ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);
+  ctx.fillStyle=on?c:c+'55';ctx.shadowColor=c;ctx.shadowBlur=on?14:4;ctx.fill();ctx.shadowBlur=0;
+  // Crosshair
+  const sz=on?9:6;
+  ctx.strokeStyle=c+(on?'cc':'44');ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(x-sz,y);ctx.lineTo(x+sz,y);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(x,y-sz);ctx.lineTo(x,y+sz);ctx.stroke();
+  // Labels for own cursor
   if(isYou){
-    const lt=x<CW/2; ctx.textAlign=lt?'left':'right';
-    const tx=lt?x+22:x-22;
-    ctx.font="bold 8px 'Orbitron',monospace";
-    ctx.fillStyle=c+(on?'ff':'80'); ctx.fillText('YOU',tx,y+3);
-    ctx.font="7px 'Orbitron',monospace";
-    ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.fillText('HOLD TO BEAM',tx,y+14);
+    const lft=x<CW/2;ctx.textAlign=lft?'left':'right';
+    const tx=lft?x+20:x-20;
+    ctx.font="bold 8px 'Orbitron',monospace";ctx.fillStyle=c+(on?'ff':'88');
+    ctx.fillText('YOU',tx,y+3);
+    ctx.font="7px 'Orbitron',monospace";ctx.fillStyle='rgba(255,255,255,0.22)';
+    ctx.fillText(on?'HOLDING':'MOVE + HOLD',tx,y+13);
   }
   ctx.restore();
 }
@@ -767,9 +842,11 @@ function dNode(x,y,c,on,isYou){
 function resetGame(){
   cleanup();
   rid=null; pid=null; host=false; lba=false; parts=[]; tipT=''; tipA=0;
-  gs={status:'idle',level:0,ball:{...LV[0].bs},p1A:false,p2A:false};
+  localCursor={x:P1B.x,y:P1B.y};
+  gs={status:'idle',level:0,ball:{...LV[0].bs},p1A:false,p2A:false,
+      p1cx:P1B.x,p1cy:P1B.y,p2cx:P2B.x,p2cy:P2B.y};
   cv=null; ctx=null; sa=0; msgCount=0; sessionTs=Date.now();
-  lastP2Beam=null; lastP2Ts=0;
+  lastP2Beam=null; lastP2cx=null; lastP2cy=null; lastP2Ts=0;
   document.getElementById('ji').value='';
   document.getElementById('ji').disabled=false;
   document.getElementById('je').textContent='';
